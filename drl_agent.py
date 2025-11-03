@@ -1,6 +1,6 @@
 #!/usr/bin/python3
 """
-AI-Driven TE Agent using Classic Q-Learning (No TensorFlow)
+AI-Driven TE Agent using Classic Q-Learning (No TensorFlow) - FINAL + DASHBOARD
 
 This agent uses a simple Q-Table (a dictionary) to learn the best path.
 
@@ -39,43 +39,31 @@ class QLearningAgent:
         self.learning_rate = LEARNING_RATE
         
         # This is the "brain". Instead of a TF model, it's a simple dictionary.
-        # It provides a default value [0.0, 0.0] for any new state.
         self.q_table = defaultdict(lambda: np.zeros(self.action_size))
 
     def act(self, state):
         """
-        Chooses an action using Epsilon-Greedy policy:
-        - With probability epsilon, choose a random action (Explore)
-        - With probability 1-epsilon, choose the best action (Exploit)
+        Chooses an action using Epsilon-Greedy policy.
         """
         if np.random.rand() <= self.epsilon:
             return random.randrange(self.action_size) # Explore
         
-        # Exploit: Look up the Q-scores for this state in the Q-Table
         q_scores = self.q_table[state]
-        return np.argmax(q_scores) # Returns index 0 or 1
+        return np.argmax(q_scores) # Exploit
 
     def learn(self, state, action, reward, next_state):
         """
         Updates the Q-Table using the Bellman equation.
-        This is the core learning logic.
         """
-        
-        # Get the current Q-score for the state and action we took
         current_q = self.q_table[state][action]
-        
-        # Get the max Q-score for the *next* state (predicted future reward)
         next_max_q = np.max(self.q_table[next_state])
         
         # --- The Q-Learning Formula ---
-        # new_q = (1-alpha) * old_q + alpha * (reward + gamma * max_future_q)
         new_q = (1 - self.learning_rate) * current_q + \
                 self.learning_rate * (reward + self.gamma * next_max_q)
         
-        # Update the Q-Table with the new, smarter Q-score
         self.q_table[state][action] = new_q
         
-        # Decay epsilon to reduce exploration over time
         if self.epsilon > EPSILON_END:
             self.epsilon *= EPSILON_DECAY
 
@@ -92,15 +80,17 @@ def get_network_stats():
 def discretize_state(port_stats, last_port_tx):
     """
     Parses raw stats and *discretizes* them into a simple state tuple.
-    This is the most important change.
     """
     current_port_tx = {PORT_A: 0, PORT_B: 0}
     
     s1_stats = port_stats.get(str(SWITCH_DPID), [])
     
     for port in s1_stats:
-        port_no = port.get('port_no')
-        tx_bytes = port.get('tx_bytes', 0)
+        # --- THIS IS THE CRITICAL BUG FIX ---
+        port_no = int(port.get('port_no', 0))
+        # ------------------------------------
+        
+        tx_bytes = int(port.get('tx_bytes', 0))
         
         if port_no == PORT_A:
             current_port_tx[PORT_A] = tx_bytes
@@ -113,7 +103,6 @@ def discretize_state(port_stats, last_port_tx):
     if throughput_A < 0: throughput_A = 0
     if throughput_B < 0: throughput_B = 0
 
-    # This "discretizer" turns a number like 5,000,000 into a category "high"
     def get_traffic_level(throughput):
         if throughput < 100000: # Less than 100KB
             return 'low'
@@ -122,25 +111,21 @@ def discretize_state(port_stats, last_port_tx):
         else: # 1MB+
             return 'high'
 
-    # The state is now a simple, readable tuple
     state = (get_traffic_level(throughput_A), get_traffic_level(throughput_B))
-    
-    # We also return the raw throughput for the reward calculation
     raw_throughput = [throughput_A, throughput_B]
     
     return state, current_port_tx, raw_throughput
 
 def calculate_reward(raw_throughput):
     """
-    Calculates the reward. We want to *minimize* congestion,
-    so we return the *negative* of the max throughput.
+    Calculates the reward: the negative of the max throughput.
     """
     return -1 * max(raw_throughput)
 
 def execute_action(action):
     """
     Executes the chosen action (0 or 1) by sending a flow rule
-    to the Ryu controller. (This function is unchanged)
+    to the Ryu controller.
     """
     port_to_use = PORT_A if action == 0 else PORT_B
     
@@ -169,11 +154,36 @@ def execute_action(action):
     except Exception as e:
         print(f"  ERROR sending flow rule: {e}")
 
+# --- NEW FUNCTION FOR DASHBOARD ---
+def update_controller_q_table(agent):
+    """Sends the agent's Q-Table to the Ryu controller for the dashboard."""
+    
+    # We must convert the defaultdict to a plain dict for JSON
+    # And convert state tuples (('low', 'low')) to strings
+    # And convert numpy arrays to simple lists
+    q_table_serializable = {str(k): v.tolist() for k, v in agent.q_table.items()}
+    
+    try:
+        requests.post(f"{RYU_URL}/update_q_table", json=q_table_serializable)
+        # We don't need to print this every time
+        # print("  Q-Table successfully sent to controller dashboard.")
+    except Exception as e:
+        print(f"  Error sending Q-Table to controller: {e}")
+
 # --- Main Learning Loop ---
 def main():
     agent = QLearningAgent(ACTION_SIZE)
-    last_port_tx = {PORT_A: 0, PORT_B: 0}
     
+    # Initialize last_port_tx to avoid a huge negative value on first run
+    print("Initializing agent... fetching initial network state.")
+    initial_stats = get_network_stats()
+    if not initial_stats:
+        print("Could not contact controller. Exiting.")
+        return
+        
+    _, last_port_tx, _ = discretize_state(initial_stats, {PORT_A: 0, PORT_B: 0})
+    print("Initialization complete. Starting learning loop.")
+
     for e in range(1, 1001):
         print(f"\n--- Episode {e} (Epsilon: {agent.epsilon:.3f}) ---")
         
@@ -212,11 +222,14 @@ def main():
         
         last_port_tx = next_port_tx
         
+        # Print Q-Table and send to dashboard every 20 episodes
         if e % 20 == 0:
             print("--- Q-Table ---")
             for s, q in agent.q_table.items():
                 print(f"  {s}: {q}")
+            
+            # --- THIS IS THE NEW LINE ---
+            update_controller_q_table(agent)
 
 if __name__ == "__main__":
     main()
-

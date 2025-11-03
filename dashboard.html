@@ -1,0 +1,164 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>AI Network Dashboard</title>
+    <style>
+        body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; background: #f4f4f4; color: #333; margin: 0; padding: 20px; }
+        h1, h2 { text-align: center; color: #222; }
+        #container { max-width: 1000px; margin: 0 auto; }
+        #dashboard { display: grid; grid-template-columns: 1fr 1fr; gap: 30px; }
+        .card { background: #fff; border-radius: 10px; box-shadow: 0 4px 12px rgba(0,0,0,0.05); padding: 25px; transition: all 0.3s ease; border: 2px solid transparent; }
+        .card h3 { margin-top: 0; }
+        .card.low { border-color: #28a745; }
+        .card.medium { border-color: #ffc107; }
+        .card.high { border-color: #dc3545; box-shadow: 0 6px 20px rgba(255,0,0,0.3); }
+        .card p { font-size: 1.1em; line-height: 1.6; margin: 10px 0; }
+        .card strong { font-size: 1.3em; }
+        .card.low strong { color: #28a745; }
+        .card.medium strong { color: #ffc107; }
+        .card.high strong { color: #dc3545; }
+
+        table { width: 100%; border-collapse: collapse; margin-top: 20px; }
+        th, td { padding: 12px; border: 1px solid #ddd; text-align: left; }
+        th { background: #f9f9f9; }
+        td strong { font-size: 1.1em; }
+        .q-good { color: #28a745; }
+        .q-bad { color: #dc3545; }
+    </style>
+</head>
+<body>
+    <div id="container">
+        <h1>🤖 AI Network Control Dashboard</h1>
+        
+        <div id="dashboard">
+            <div class="card" id="path-a">
+                <h3>Path A (via Port 2)</h3>
+                <p>Congestion: <strong id="path-a-congestion">...</strong></p>
+            </div>
+            <div class.card" id="path-b">
+                <h3>Path B (via Port 3)</h3>
+                <p>Congestion: <strong id="path-b-congestion">...</strong></p>
+            </div>
+        </div>
+
+        <h2>🧠 AI "Brain" (Q-Table)</h2>
+        <div class="card">
+            <table id="q-table">
+                <thead>
+                    <tr>
+                        <th>State</th>
+                        <th>Q-Score for Path A (Action 0)</th>
+                        <th>Q-Score for Path B (Action 1)</th>
+                        <th>Best Action</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    </tbody>
+            </table>
+        </div>
+    </div>
+
+    <script>
+        const PORT_A = 2;
+        const PORT_B = 3;
+        const SWITCH_DPID = '1';
+
+        // Keep track of previous byte counts to calculate throughput
+        let lastPortTx = { [PORT_A]: 0, [PORT_B]: 0 };
+
+        async function fetchData() {
+            try {
+                const response = await fetch('/dashboard_data');
+                if (!response.ok) throw new Error(`HTTP error! status: ${response.status}`);
+                const data = await response.json();
+                
+                updatePortStats(data.port_stats);
+                updateQTable(data.q_table);
+
+            } catch (error) {
+                console.error("Error fetching data:", error);
+            }
+        }
+
+        function updatePortStats(portStats) {
+            const pathA = document.getElementById('path-a-congestion');
+            const pathB = document.getElementById('path-b-congestion');
+            
+            let currentPortTx = { [PORT_A]: 0, [PORT_B]: 0 };
+            
+            const s1Stats = portStats[SWITCH_DPID] || [];
+            
+            for (const port of s1Stats) {
+                const portNo = parseInt(port.port_no, 10);
+                const txBytes = parseInt(port.tx_bytes, 10);
+                if (portNo === PORT_A) currentPortTx[PORT_A] = txBytes;
+                if (portNo === PORT_B) currentPortTx[PORT_B] = txBytes;
+            }
+
+            // Calculate throughput (bytes in this interval)
+            let throughputA = currentPortTx[PORT_A] - lastPortTx[PORT_A];
+            let throughputB = currentPortTx[PORT_B] - lastPortTx[PORT_B];
+            if (throughputA < 0) throughputA = 0;
+            if (throughputB < 0) throughputB = 0;
+            
+            // Discretize for display
+            const levelA = getTrafficLevel(throughputA);
+            const levelB = getTrafficLevel(throughputB);
+
+            pathA.textContent = levelA.toUpperCase();
+            pathB.textContent = levelB.toUpperCase();
+
+            // Update styling
+            document.getElementById('path-a').className = `card ${levelA}`;
+            document.getElementById('path-b').className = `card ${levelB}`;
+
+            // Save state for next calculation
+            lastPortTx = currentPortTx;
+        }
+
+        function updateQTable(qTable) {
+            const tbody = document.querySelector("#q-table tbody");
+            tbody.innerHTML = ""; // Clear old data
+
+            for (const stateString in qTable) {
+                const qScores = qTable[stateString];
+                const qA = qScores[0];
+                const qB = qScores[1];
+                
+                let bestAction = "Path A";
+                let classA = "q-good";
+                let classB = "q-bad";
+
+                if (qB > qA) {
+                    bestAction = "Path B";
+                    classA = "q-bad";
+                    classB = "q-good";
+                }
+
+                const row = `
+                    <tr>
+                        <td><strong>${stateString}</strong></td>
+                        <td class="${classA}">${qA.toFixed(2)}</td>
+                        <td class="${classB}">${qB.toFixed(2)}</td>
+                        <td><strong class="${(bestAction === 'Path A') ? 'q-good' : 'q-bad'}">${bestAction}</strong></td>
+                    </tr>
+                `;
+                tbody.innerHTML += row;
+            }
+        }
+
+        function getTrafficLevel(throughput) {
+            if (throughput < 100000) return 'low';
+            if (throughput < 1000000) return 'medium';
+            return 'high';
+        }
+
+        // Fetch data every 2 seconds
+        setInterval(fetchData, 2000);
+        // Run immediately on load
+        fetchData();
+    </script>
+</body>
+</html>
