@@ -1,0 +1,56 @@
+h1(port1)--s1(port2)---s2-s4-h2                     s1-s2-s4 PATH A        
+           (port3)         |                        s1-s3-s4 PATH B
+               |--s3-------
+
+when ryu controller is started, a flow table is created with the flow rule [priority : 0, match : {in-port : 1, destination ip : h2 ka IP} , actions : send to ryu controller] 
+initially 
+drl sends get request to ryu 
+ryu sends states to drl 
+states[port2, port3] - [low, low]  initially  (low means less congestion means transmitted bytes through that port is less than 100kb)
+now drl sends this to the neural network and it uses some formula to calculate a Q score 
+eg Q score - [-10,-15] 
+higher q score means less congested path 
+here the q score of port 2 >  port 3 therefore the path via port 2 is less congested and the next time whenever the drl agent sees [low, low] state it automatically choses the path via port 2.
+drl post req to ryu sending a json object which includes the flow rule [priority : 100, match : SAME, action : port 2] 
+new flow rule is added in the flow table.
+
+After the POST /reroute_flow request is sent, your agent's code immediately runs time.sleep(5).
+
+This 5-second pause is critical. It gives the network time to change:
+
+Ryu (Terminal 1) installs the new Priority=100 rule.
+
+Mininet's (Terminal 2) iperf3 traffic physically switches to the new path.
+
+
+Ryu's background monitor (_monitor) runs and collects the new congestion stats (tx_bytes) from this new path.
+new state - [high, low]
+Q score - [-1000,0]
+new state - [low, high] 
+ NOW REWARD IS CALCULATED.
+
+reward is calculated by The Formula: reward = -1 * max(next_raw_throughput) which in this case is : 
+reward = -1 * max([0,-5000000]) = -500,000 
+Agent learns that whenever the state is [high, low] the reward is Extremely LOW which means re routing to [low, high] is bad.
+.
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+now the agent has two choices 
+
+(Curr state  : [high, low])
+either increase the traffic on path A (matlab Pehle se port 2 pe traffic jytada hai uske aur badha do) --> [high high,low] 
+OR shift the traffic to path B via port 3 maltab state [low, high] krdo 
+
